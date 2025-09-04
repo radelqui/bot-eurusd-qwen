@@ -1,5 +1,9 @@
-python-telegram-bot[asyncio]
 yfinance
+pandas
+numpy
 requests
-plotly
+scikit-learn
+ta
+python-telegram-bot[asyncio]
 python-dotenv
+joblib
