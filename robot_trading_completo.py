@@ -1,4 +1,4 @@
-# robot_trading_completo.py
+# robot_trading_completo.py - VERSIÓN CORREGIDA
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -12,7 +12,7 @@ import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
@@ -55,6 +55,7 @@ class PriceActionAnalyzer:
             open_ = data['Open']
             high = data['High']
             low = data['Low']
+
             body = abs(close - open_)
             lower_wick = low - open_.where(close > open_, close)
             upper_wick = high - close.where(close > open_, open_)
@@ -262,12 +263,14 @@ class RobotTradingFinal:
                 logger.error("Datos insuficientes para entrenar")
                 return False
 
-            # Eliminar filas con NaN o inf
+            # Asegurar que no haya valores NaN o infinitos
             X = df.drop(['resultado', 'par', 'cambio_real', 'umbral_usado'], axis=1, errors='ignore')
             y = df['resultado']
+
+            # Eliminar filas con NaN o inf
             valid_rows = X.apply(lambda row: not row.isna().any() and not np.isinf(row).any(), axis=1)
             X = X[valid_rows]
-            y = y[valid_rows]
+            y = y[valid_rows.index[valid_rows]]
 
             if len(X) == 0:
                 logger.error("No hay muestras válidas después de limpieza")
@@ -371,7 +374,7 @@ class RobotTradingFinal:
             high = data['High']
             low = data['Low']
             volume = data['Volume']
-            precio_actual = float(close.iloc[-1])
+            precio_actual = close.iloc[-1]
 
             # Indicadores técnicos
             ema_20 = EMAIndicator(close, window=20).ema_indicator()
@@ -493,65 +496,102 @@ class RobotTradingFinal:
         logger.info(f"Total de muestras recolectadas: {len(todos_los_datos)}")
         return todos_los_datos
 
-    def procesar_datos_par(self, data: pd.DataFrame, ticker: str, sr_niveles: Dict) -> List[Dict]:
+    def procesar_datos_par(self, data: pd.DataFrame, ticker: str, sr_niveles: Dict):
         muestras = []
         data_formateada = self.asegurar_formato_datos(data)
-        if data_formateada is None:
+        if data_formateada is None or len(data_formateada) < 100:
             return muestras
-
-        close = data_formateada['Close']
-        high = data_formateada['High']
-        low = data_formateada['Low']
-        volume = data_formateada['Volume']
-
+        
         try:
-            atr_series = AverageTrueRange(high, low, close).average_true_range()
+            # Asegurar que las columnas son Series válidas con índice correcto
+            close = data_formateada['Close'].copy()
+            high = data_formateada['High'].copy()  
+            low = data_formateada['Low'].copy()
+            volume = data_formateada['Volume'].copy()
+            
+            # Resetear índice para evitar problemas con ATR
+            close.reset_index(drop=True, inplace=True)
+            high.reset_index(drop=True, inplace=True)
+            low.reset_index(drop=True, inplace=True)
+            
+            # Calcular ATR manualmente si la librería falla
+            try:
+                atr_indicator = AverageTrueRange(high, low, close, window=14)
+                atr_series = atr_indicator.average_true_range()
+            except Exception as atr_error:
+                logger.warning(f"ATR librería falló para {ticker}, calculando manualmente: {atr_error}")
+                # ATR manual
+                tr1 = high - low
+                tr2 = (high - close.shift(1)).abs()
+                tr3 = (low - close.shift(1)).abs()
+                true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+                atr_series = true_range.rolling(window=14).mean()
+                
         except Exception as e:
-            logger.error(f"Error calculando ATR para {ticker}: {e}")
+            logger.error(f"Error crítico procesando datos de {ticker}: {e}")
             return muestras
 
+        logger.info(f"Procesando {ticker}: {len(data_formateada)} velas, ATR calculado correctamente")
+        
         for i in range(60, len(data_formateada) - 15):
             try:
                 precio_actual = float(close.iloc[i])
-                atr_actual = float(atr_series.iloc[i])
-                if pd.isna(atr_actual) or atr_actual <= 0:
-                    continue
+                
+                # Usar ATR con fallback
+                atr_actual = float(atr_series.iloc[i]) if i < len(atr_series) and not pd.isna(atr_series.iloc[i]) else 0.001
+                
+                if atr_actual <= 0:
+                    atr_actual = abs(precio_actual * 0.001)  # 0.1% como fallback
+                    
                 umbral_dinamico = atr_actual * 0.5
-
+                
+                # Precio futuro
                 precio_futuro = float(close.iloc[i + 10])
                 cambio_porcentual = (precio_futuro - precio_actual) / precio_actual
-
-                if cambio_porcentual > umbral_dinamico:
+                
+                cambio_val = float(cambio_porcentual) 
+                umbral_val = float(umbral_dinamico)
+                
+                if cambio_val > umbral_val:
                     resultado = 1
-                elif cambio_porcentual < -umbral_dinamico:
+                elif cambio_val < -umbral_val:
                     resultado = -1
                 else:
                     resultado = 0
-
-                features = self.extraer_features(data_formateada[:i+1], ticker)
+                
+                # Extraer features usando slice correcto
+                data_slice = data_formateada.iloc[:i+1].copy()
+                features = self.extraer_features(data_slice, ticker)
+                
+                if not features:  # Si features está vacío
+                    continue
+                    
                 features['resultado'] = resultado
-                features['par'] = ticker
-                features['cambio_real'] = cambio_porcentual
-                features['umbral_usado'] = umbral_dinamico
-
+                features['par'] = ticker 
+                features['cambio_real'] = cambio_val
+                features['umbral_usado'] = umbral_val
+                
+                # Validación mejorada
                 valid = True
-                for v in features.values():
+                for k, v in features.items():
                     if isinstance(v, (int, float)):
                         if pd.isna(v) or np.isinf(v) or abs(v) > 1e6:
                             valid = False
                             break
-
+                            
                 if valid:
                     muestras.append(features)
-            except (IndexError, ValueError, TypeError):
+                    
+            except (IndexError, KeyError, ValueError) as e:
                 continue
             except Exception as e:
-                logger.error(f"Error procesando muestra en índice {i}: {e}")
+                logger.error(f"Error procesando muestra {i} de {ticker}: {e}")
                 continue
-
+                
+        logger.info(f"✅ {ticker}: {len(muestras)} muestras válidas generadas")
         return muestras
 
-    def calcular_sr_multitimeframe(self, ticker: str) -> Dict[str, Dict]:
+    def calcular_sr_multitimeframe(self, ticker: str):
         niveles = {}
         timeframes = {"1d": "1mo", "4h": "10d", "1h": "5d"}
         for tf, periodo in timeframes.items():
