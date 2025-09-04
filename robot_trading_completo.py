@@ -1,4 +1,4 @@
-# robot_trading_completo.py - VERSIÓN CORREGIDA
+# robot_trading_completo.py
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -12,7 +12,7 @@ import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
@@ -55,7 +55,6 @@ class PriceActionAnalyzer:
             open_ = data['Open']
             high = data['High']
             low = data['Low']
-
             body = abs(close - open_)
             lower_wick = low - open_.where(close > open_, close)
             upper_wick = high - close.where(close > open_, open_)
@@ -263,14 +262,12 @@ class RobotTradingFinal:
                 logger.error("Datos insuficientes para entrenar")
                 return False
 
-            # Asegurar que no haya valores NaN o infinitos
+            # Limpiar datos
             X = df.drop(['resultado', 'par', 'cambio_real', 'umbral_usado'], axis=1, errors='ignore')
             y = df['resultado']
-
-            # Eliminar filas con NaN o inf
             valid_rows = X.apply(lambda row: not row.isna().any() and not np.isinf(row).any(), axis=1)
             X = X[valid_rows]
-            y = y[valid_rows.index[valid_rows]]
+            y = y[valid_rows]
 
             if len(X) == 0:
                 logger.error("No hay muestras válidas después de limpieza")
@@ -374,7 +371,7 @@ class RobotTradingFinal:
             high = data['High']
             low = data['Low']
             volume = data['Volume']
-            precio_actual = close.iloc[-1]
+            precio_actual = float(close.iloc[-1])
 
             # Indicadores técnicos
             ema_20 = EMAIndicator(close, window=20).ema_indicator()
@@ -385,7 +382,10 @@ class RobotTradingFinal:
             bb = BollingerBands(close)
             bb_upper = bb.bollinger_hband().iloc[-1]
             bb_lower = bb.bollinger_lband().iloc[-1]
-            atr = AverageTrueRange(high, low, close).average_true_range().iloc[-1]
+            try:
+                atr = AverageTrueRange(high, low, close).average_true_range().iloc[-1]
+            except:
+                atr = 0.001  # Valor por defecto si falla
 
             # Análisis cuántico
             alma = self.quantum_geometric._calcular_alma(close).iloc[-1]
@@ -409,227 +409,4 @@ class RobotTradingFinal:
                 'bloque_consolidacion': 1 if patrones['martillo'] else 0,
                 'bloque_momentum': 1 if patrones['estrella_inversion'] else 0,
                 'tendencia_alcista': 1 if tendencia == 'alcista' else 0,
-                'hora': datetime.now().hour / 24.0,
-                'dia_semana': datetime.now().weekday() / 7.0
-            }
-        except Exception as e:
-            logger.error(f"Error extrayendo features: {e}")
-            return {}
-
-    def calcular_sl_tp(self, data: pd.DataFrame, prediccion: int, precio_entrada: float):
-        try:
-            data_formateada = self.asegurar_formato_datos(data)
-            if data_formateada is None:
-                return None
-
-            high = data_formateada['High']
-            low = data_formateada['Low']
-            close = data_formateada['Close']
-            atr = AverageTrueRange(high, low, close).average_true_range().iloc[-1]
-
-            if prediccion == 1:  # COMPRA
-                stop_loss = precio_entrada - (atr * 1.5)
-                take_profit = precio_entrada + (atr * 3.0)
-            else:  # VENTA
-                stop_loss = precio_entrada + (atr * 1.5)
-                take_profit = precio_entrada - (atr * 3.0)
-
-            risk_reward = abs((take_profit - precio_entrada) / (precio_entrada - stop_loss)) if (precio_entrada - stop_loss) != 0 else 0
-
-            return {
-                'stop_loss': stop_loss,
-                'take_profit': take_profit,
-                'risk_reward': risk_reward
-            }
-        except Exception as e:
-            logger.error(f"Error calculando SL/TP: {e}")
-            return None
-
-    def crear_mensaje_alerta(self, senal: Dict, sl_tp: Dict, tamano_operacion: float) -> str:
-        direccion_emoji = "🟢" if senal['prediccion'] == 1 else "🔴"
-        direccion_texto = "COMPRA" if senal['prediccion'] == 1 else "VENTA"
-        patron = senal['analisis_cualitativo']['price_action']['patron']
-        tendencia = senal['analisis_cualitativo']['price_action']['tendencia']
-        cruce = senal['analisis_cualitativo']['quantum_geometric']['cruce']
-
-        mensaje = f"""
-{direccion_emoji} <b>SEÑAL IA DETECTADA</b>
-{'='*30}
-<b>📊 PAR:</b> {senal['nombre']} ({senal['tipo'].upper()})
-<b>📈 DIRECCIÓN:</b> {direccion_texto}
-<b>💰 PRECIO:</b> {senal['precio_actual']:.5f}
-<b>🛑 STOP LOSS:</b> {sl_tp['stop_loss']:.5f}
-<b>🎯 TAKE PROFIT:</b> {sl_tp['take_profit']:.5f}
-<b>📊 TAMAÑO:</b> {tamano_operacion:.2f} unidades
-<b>🤖 CONFIANZA:</b> {senal['confianza']*100:.1f}%
-<b>⚖️ R/R:</b> 1:{sl_tp['risk_reward']:.1f}
-<b>📈 ANÁLISIS TÉCNICO:</b>
-• Patrón: {patron}
-• Tendencia: {tendencia.upper()}
-• Cruce ALMA/Kernel: {'SÍ' if cruce else 'NO'}
-<b>⏰</b> {datetime.now().strftime('%d/%m/%Y %H:%M:%S')} UTC
-"""
-        return mensaje
-
-    def obtener_datos_multiples_pares(self):
-        logger.info("Obteniendo datos de mercado...")
-        todos_los_datos = []
-        for ticker, info in PARES_FOREX.items():
-            nombre = info['nombre']
-            try:
-                logger.info(f"Procesando {nombre} ({ticker})...")
-                data = self.data_provider.get_historical_data(
-                    ticker,
-                    (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d'),
-                    datetime.now().strftime('%Y-%m-%d'),
-                    "1h"
-                )
-                if data is None or len(data) < 60:
-                    continue
-
-                sr_niveles = self.calcular_sr_multitimeframe(ticker)
-                muestras = self.procesar_datos_par(data, ticker, sr_niveles)
-                todos_los_datos.extend(muestras)
-            except Exception as e:
-                logger.error(f"Error procesando {nombre}: {e}")
-                continue
-        logger.info(f"Total de muestras recolectadas: {len(todos_los_datos)}")
-        return todos_los_datos
-
-    def procesar_datos_par(self, data: pd.DataFrame, ticker: str, sr_niveles: Dict):
-        muestras = []
-        data_formateada = self.asegurar_formato_datos(data)
-        if data_formateada is None or len(data_formateada) < 100:
-            return muestras
-        
-        try:
-            # Asegurar que las columnas son Series válidas con índice correcto
-            close = data_formateada['Close'].copy()
-            high = data_formateada['High'].copy()  
-            low = data_formateada['Low'].copy()
-            volume = data_formateada['Volume'].copy()
-            
-            # Resetear índice para evitar problemas con ATR
-            close.reset_index(drop=True, inplace=True)
-            high.reset_index(drop=True, inplace=True)
-            low.reset_index(drop=True, inplace=True)
-            
-            # Calcular ATR manualmente si la librería falla
-            try:
-                atr_indicator = AverageTrueRange(high, low, close, window=14)
-                atr_series = atr_indicator.average_true_range()
-            except Exception as atr_error:
-                logger.warning(f"ATR librería falló para {ticker}, calculando manualmente: {atr_error}")
-                # ATR manual
-                tr1 = high - low
-                tr2 = (high - close.shift(1)).abs()
-                tr3 = (low - close.shift(1)).abs()
-                true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-                atr_series = true_range.rolling(window=14).mean()
-                
-        except Exception as e:
-            logger.error(f"Error crítico procesando datos de {ticker}: {e}")
-            return muestras
-
-        logger.info(f"Procesando {ticker}: {len(data_formateada)} velas, ATR calculado correctamente")
-        
-        for i in range(60, len(data_formateada) - 15):
-            try:
-                precio_actual = float(close.iloc[i])
-                
-                # Usar ATR con fallback
-                atr_actual = float(atr_series.iloc[i]) if i < len(atr_series) and not pd.isna(atr_series.iloc[i]) else 0.001
-                
-                if atr_actual <= 0:
-                    atr_actual = abs(precio_actual * 0.001)  # 0.1% como fallback
-                    
-                umbral_dinamico = atr_actual * 0.5
-                
-                # Precio futuro
-                precio_futuro = float(close.iloc[i + 10])
-                cambio_porcentual = (precio_futuro - precio_actual) / precio_actual
-                
-                cambio_val = float(cambio_porcentual) 
-                umbral_val = float(umbral_dinamico)
-                
-                if cambio_val > umbral_val:
-                    resultado = 1
-                elif cambio_val < -umbral_val:
-                    resultado = -1
-                else:
-                    resultado = 0
-                
-                # Extraer features usando slice correcto
-                data_slice = data_formateada.iloc[:i+1].copy()
-                features = self.extraer_features(data_slice, ticker)
-                
-                if not features:  # Si features está vacío
-                    continue
-                    
-                features['resultado'] = resultado
-                features['par'] = ticker 
-                features['cambio_real'] = cambio_val
-                features['umbral_usado'] = umbral_val
-                
-                # Validación mejorada
-                valid = True
-                for k, v in features.items():
-                    if isinstance(v, (int, float)):
-                        if pd.isna(v) or np.isinf(v) or abs(v) > 1e6:
-                            valid = False
-                            break
-                            
-                if valid:
-                    muestras.append(features)
-                    
-            except (IndexError, KeyError, ValueError) as e:
-                continue
-            except Exception as e:
-                logger.error(f"Error procesando muestra {i} de {ticker}: {e}")
-                continue
-                
-        logger.info(f"✅ {ticker}: {len(muestras)} muestras válidas generadas")
-        return muestras
-
-    def calcular_sr_multitimeframe(self, ticker: str):
-        niveles = {}
-        timeframes = {"1d": "1mo", "4h": "10d", "1h": "5d"}
-        for tf, periodo in timeframes.items():
-            try:
-                interval_tf = tf if tf != "1d" else "1d"
-                data_tf = self.data_provider.get_historical_data(ticker, (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d'), datetime.now().strftime('%Y-%m-%d'), interval_tf)
-                if data_tf is None or data_tf.empty:
-                    niveles[tf] = {'pp': np.nan, 'r1': np.nan, 's1': np.nan, 'r2': np.nan, 's2': np.nan}
-                    continue
-
-                data_formateada = self.asegurar_formato_datos(data_tf)
-                if data_formateada is None:
-                    niveles[tf] = {'pp': np.nan, 'r1': np.nan, 's1': np.nan, 'r2': np.nan, 's2': np.nan}
-                    continue
-
-                close_tf = data_formateada['Close']
-                high_tf = data_formateada['High']
-                low_tf = data_formateada['Low']
-                if len(close_tf) < 5:
-                    niveles[tf] = {'pp': np.nan, 'r1': np.nan, 's1': np.nan, 'r2': np.nan, 's2': np.nan}
-                    continue
-
-                pp = (high_tf.iloc[-1] + low_tf.iloc[-1] + close_tf.iloc[-1]) / 3
-                r1 = (2 * pp) - low_tf.iloc[-1]
-                s1 = (2 * pp) - high_tf.iloc[-1]
-                r2 = pp + (high_tf.iloc[-1] - low_tf.iloc[-1])
-                s2 = pp - (high_tf.iloc[-1] - low_tf.iloc[-1])
-
-                niveles[tf] = {'pp': pp, 'r1': r1, 's1': s1, 'r2': r2, 's2': s2}
-            except Exception as e:
-                logger.error(f"Error calculando S/R para {tf}: {e}")
-                niveles[tf] = {'pp': np.nan, 'r1': np.nan, 's1': np.nan, 'r2': np.nan, 's2': np.nan}
-        return niveles
-
-# === PARA USAR EN EL BOT DE TELEGRAM ===
-if __name__ == "__main__":
-    robot = RobotTradingFinal()
-    if robot.entrenar_modelo():
-        logger.info("✅ Modelo entrenado y listo para usar")
-    else:
-        logger.error("❌ No se pudo entrenar el modelo")
+                'hora': datetime
