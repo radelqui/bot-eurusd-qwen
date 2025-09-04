@@ -496,57 +496,59 @@ class RobotTradingFinal:
         logger.info(f"Total de muestras recolectadas: {len(todos_los_datos)}")
         return todos_los_datos
 
-    def procesar_datos_par(self, data: pd.DataFrame, ticker: str, sr_niveles: Dict):
+    def procesar_datos_par(self, data, ticker, sr_niveles):
         muestras = []
         data_formateada = self.asegurar_formato_datos(data)
         if data_formateada is None:
             return muestras
-
         close = data_formateada['Close']
         high = data_formateada['High']
         low = data_formateada['Low']
         volume = data_formateada['Volume']
-
-        for i in range(60, len(data_formateada) - 10):
+        # Calcular ATR una vez para todo el conjunto
+        try:
+            atr_series = AverageTrueRange(high, low, close).average_true_range()
+        except Exception as e:
+            logger.error(f"Error calculando ATR para {ticker}: {e}")
+            return muestras
+        for i in range(60, len(data_formateada) - 15):
             try:
-                precio_actual = close.iloc[i]
-                if pd.isna(precio_actual) or precio_actual <= 0:
+                precio_actual = float(close.iloc[i])  # Asegurar tipo float
+                # Calcular umbral dinámico usando ATR
+                atr_actual = float(atr_series.iloc[i])
+                if pd.isna(atr_actual) or atr_actual <= 0:
                     continue
-
-                # Calcular ATR para umbral dinámico
-                atr = AverageTrueRange(high[:i+1], low[:i+1], close[:i+1]).average_true_range().iloc[-1]
-                if pd.isna(atr) or atr <= 0:
-                    continue
-
-                umbral_dinamico = atr * 0.5  # 0.5 ATR como umbral
-                precio_futuro = close.iloc[i + 10]
+                umbral_dinamico = atr_actual * 0.5
+                # Precio futuro (10 velas adelante)
+                precio_futuro = float(close.iloc[i + 10])
                 cambio_porcentual = (precio_futuro - precio_actual) / precio_actual
-
-                if cambio_porcentual > umbral_dinamico:
+                # Asegurar que ambos valores sean float antes de comparar
+                cambio_val = float(cambio_porcentual)
+                umbral_val = float(umbral_dinamico)
+                if cambio_val > umbral_val:
                     resultado = 1
-                elif cambio_porcentual < -umbral_dinamico:
+                elif cambio_val < -umbral_val:
                     resultado = -1
                 else:
                     resultado = 0
-
                 features = self.extraer_features(data_formateada[:i+1], ticker)
                 features['resultado'] = resultado
                 features['par'] = ticker
-                features['cambio_real'] = cambio_porcentual
-                features['umbral_usado'] = umbral_dinamico
-
+                features['cambio_real'] = cambio_val
+                features['umbral_usado'] = umbral_val
                 # Validar que todas las features sean números válidos
-                is_valid = True
+                valid = True
                 for k, v in features.items():
                     if isinstance(v, (int, float)):
-                        if pd.isna(v) or np.isinf(v) or abs(v) > 10000:
-                            is_valid = False
+                        if pd.isna(v) or np.isinf(v) or abs(v) > 1e6:
+                            valid = False
                             break
-
-                if is_valid:
+                if valid:
                     muestras.append(features)
+            except IndexError:
+                continue
             except Exception as e:
-                logger.error(f"Error procesando muestra: {e}")
+                logger.error(f"Error procesando muestra en índice {i}: {e}")
                 continue
         return muestras
 
