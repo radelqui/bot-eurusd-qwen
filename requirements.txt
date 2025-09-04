@@ -1,5 +1,6 @@
 python-telegram-bot[asyncio]
 yfinance
 requests
+plotly
 matplotlib
 python-dotenv
