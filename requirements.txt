@@ -9,3 +9,4 @@ python-dotenv
 joblib
 plotly
 matplotlib 
+seaborn
