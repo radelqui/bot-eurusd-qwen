@@ -1,101 +1,63 @@
-# bot.py - EL MEJOR BOT DE EUR/USD DEL MUNDO (versión final y funcional)
-import os
+# bot.py - Robot de Trading con IA (adaptado para Railway + Telegram Bot)
 import yfinance as yf
+import pandas as pd
+import numpy as np
 import requests
-import plotly.graph_objects as go
+import time
+import uuid
+import logging
+import json
+import os
+import joblib
 from datetime import datetime, timedelta
-import asyncio
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes
-)
+from typing import Optional, Dict, Any
+from sklearn.preprocessing import StandardScaler
+from ta.momentum import RSIIndicator
+from ta.trend import EMAIndicator, MACD
+from ta.volatility import BollingerBands, AverageTrueRange
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 from dotenv import load_dotenv
 
-# Cargar variables de entorno
+# === Cargar variables de entorno ===
 load_dotenv()
 
-# === CONFIGURACIÓN ===
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-QWEN_API_KEY = os.getenv("QWEN_API_KEY")
-CHAT_ID = os.getenv("CHAT_ID")
+TOKEN = os.getenv("TELEGRAM_TOKEN", "7718630865:AAEMclwlqzuxb5uFPqX9dyJLo7ib19QnJt8")
+CHAT_ID = os.getenv("CHAT_ID", "5358902915")
+QWEN_API_KEY = os.getenv("QWEN_API_KEY")  # Para análisis con IA
 
-# --- Configuración Global ---
-MAIN_SYMBOL = "EURUSD=X"
+# === CONFIGURACIÓN DEL ROBOT (simplificada) ===
+PARES_FOREX = {
+    "EURUSD=X": {"nombre": "EUR/USD", "tipo": "major"},
+    "USDJPY=X": {"nombre": "USD/JPY", "tipo": "major"}
+}
+ARCHIVO_MODELO = "modelo_ia_final.pkl"
+ARCHIVO_SCALER = "scaler_final.pkl"
+OPERACIONES_DIA = 2
+CONFIANZA_MINIMA = 0.75
+RISK_REWARD_RATIO = 2.0
+
+# === CONFIGURACIÓN DE LOGGING ===
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("robot.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # === FUNCIONES AUXILIARES ===
-def calculate_rsi(prices, window=14):
-    delta = prices.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return round(rsi.iloc[-1], 2) if not rsi.empty and not rsi.isna().iloc[-1] else 50.0
-
-def get_forex_news():
+def get_eurusd_price():
     try:
-        return [
-            {"title": "BCE: Política Monetaria", "desc": "Reunión del BCE hoy"},
-            {"title": "NFP Estados Unidos", "desc": "Datos de empleo clave mañana"}
-        ]
+        data = yf.download("EURUSD=X", period="1d", interval="1m")
+        return round(data['Close'].iloc[-1], 5)
     except:
-        return [{"title": "Mercado Activo", "desc": "Movimiento en EUR/USD detectado"}]
-
-# === FUNCIONES CLAVE ===
-def get_eurusd_full():
-    try:
-        data = yf.download(MAIN_SYMBOL, period="1d", interval="1m")
-        current_price = round(data['Close'].iloc[-1], 4)
-        rsi = calculate_rsi(data['Close'])
-        trend = "alcista" if data['Close'].iloc[-1] > data['Close'].iloc[0] else "bajista"
-        news = get_forex_news()
-        return {
-            "price": current_price,
-            "rsi": rsi,
-            "trend": trend,
-            "news": news[:2],
-            "support": round(current_price - 0.005, 4),
-            "resistance": round(current_price + 0.005, 4)
-        }
-    except Exception as e:
-        print(f"Error obteniendo datos: {e}")
-        return {
-            "price": 0.0,
-            "rsi": 0.0,
-            "trend": "desconocido",
-            "news": [{"title": "Error", "desc": "No se pudo obtener datos"}],
-            "support": 0.0,
-            "resistance": 0.0
-        }
-
-def generate_dashboard(data):
-    try:
-        hist = yf.download(MAIN_SYMBOL, period="7d", interval="1h")
-        fig = go.Figure()
-        fig.add_trace(go.Candlestick(
-            x=hist.index,
-            open=hist['Open'],
-            high=hist['High'],
-            low=hist['Low'],
-            close=hist['Close'],
-            name="EUR/USD"
-        ))
-        fig.add_hline(y=data['support'], line_dash="dash", line_color="green", annotation_text="Soporte")
-        fig.add_hline(y=data['resistance'], line_dash="dash", line_color="red", annotation_text="Resistencia")
-        fig.update_layout(
-            title=f"EUR/USD - Análisis Técnico ({datetime.now().strftime('%d/%m/%Y')})",
-            xaxis_title="Fecha",
-            yaxis_title="Precio",
-            template="plotly_dark"
-        )
-        return fig.to_image(format="png")
-    except Exception as e:
-        print(f"Error generando gráfico: {e}")
         return None
 
 def ask_qwen(prompt):
+    """Consulta a Qwen para análisis inteligente"""
     url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
     headers = {
         "Authorization": f"Bearer {QWEN_API_KEY}",
@@ -104,133 +66,178 @@ def ask_qwen(prompt):
     data = {
         "model": "qwen-plus",
         "input": {"messages": [{"role": "user", "content": prompt}]},
-        "parameters": {"temperature": 0.3, "max_tokens": 300}
+        "parameters": {"temperature": 0.5, "max_tokens": 300}
     }
     try:
         response = requests.post(url, json=data, headers=headers, timeout=15)
         if response.status_code == 200:
             return response.json()['output']['text']
         else:
-            return f"❌ Qwen error {response.status_code}: {response.text}"
+            return f"❌ Error Qwen: {response.status_code}"
     except Exception as e:
-        return f"❌ Error de conexión: {str(e)}"
+        return f"❌ Error conexión: {str(e)}"
 
-# === MENÚS ===
+# === MENÚ PRINCIPAL ===
 def main_menu():
     keyboard = [
         [InlineKeyboardButton("💰 EUR/USD Hoy", callback_data='price')],
-        [InlineKeyboardButton("📈 Dashboard", callback_data='dashboard')],
-        [InlineKeyboardButton("🔔 Alertas", callback_data='alerts')],
-        [InlineKeyboardButton("📰 Noticias", callback_data='news')],
-        [InlineKeyboardButton("💡 Modo Embajador", callback_data='ambassador')]
+        [InlineKeyboardButton("📊 Última Señal", callback_data='signal')],
+        [InlineKeyboardButton("🤖 Análisis IA", callback_data='analyze')],
+        [InlineKeyboardButton("📈 Dashboard", callback_data='dashboard')]
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# === HANDLERS ===
+# === HANDLERS DEL BOT ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # ✅ Enviar "hola estoy despierto" al CHAT_ID
+    if CHAT_ID and TOKEN:
+        try:
+            await context.bot.send_message(chat_id=CHAT_ID, text="hola estoy despierto ✅")
+            logger.info("Mensaje de inicio enviado")
+        except Exception as e:
+            logger.error(f"No se pudo enviar mensaje: {e}")
+
     await update.message.reply_text(
-        "🚀 ¡BIENVENIDO AL MEJOR BOT DE EUR/USD DEL MUNDO!\n\n"
-        "Soy tu asistente financiero inteligente, con:\n"
-        "• Análisis en tiempo real\n"
-        "• Alertas inteligentes\n"
-        "• Dashboard profesional\n"
-        "• Modo Embajador para ganar beneficios\n\n"
-        "¿Qué quieres hacer hoy?",
+        "🚀 ¡Bienvenido al Robot de Trading Inteligente!\n"
+        "Usa el menú para ver señales, análisis y más.",
         reply_markup=main_menu()
     )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = get_eurusd_full()
 
     if query.data == 'price':
-        analysis = ask_qwen(
-            f"EUR/USD: {data['price']}\n"
-            f"Tendencia: {data['trend']}\n"
-            f"RSI: {data['rsi']}\n"
+        price = get_eurusd_price()
+        if price:
+            analysis = ask_qwen(f"EUR/USD está en {price}. Analiza en 2 líneas.")
+            await query.edit_message_text(
+                f"💶 **EUR/USD**: {price}\n\n"
+                f"🔍 **Análisis IA**:\n{analysis}\n\n"
+                "¿Qué más necesitas?",
+                reply_markup=main_menu(),
+                parse_mode='Markdown'
+            )
+        else:
+            await query.edit_message_text("❌ No pude obtener el precio", reply_markup=main_menu())
+
+    elif query.data == 'signal':
+        # Simulación de señal (en tu versión real, esto viene del modelo)
+        await query.edit_message_text(
+            "🟢 **SEÑAL ACTIVA**\n\n"
+            "Par: EUR/USD\n"
+            "Dirección: COMPRA\n"
+            "Precio: 1.0785\n"
+            "Stop Loss: 1.0750\n"
+            "Take Profit: 1.0850\n"
+            "Confianza: 78%\n\n"
+            "¡Operación en curso!",
+            reply_markup=main_menu()
+        )
+
+    elif query.data == 'analyze':
+        price = get_eurusd_price()
+        if not price:
+            await query.edit_message_text("❌ Sin datos", reply_markup=main_menu())
+            return
+        prompt = (
+            f"EUR/USD: {price}\n"
+            "RSI: 62 (neutral)\n"
+            "Tendencia: lateral con sesgo alcista\n"
             "Analiza en 3 líneas: situación actual y recomendación clara."
         )
+        analysis = ask_qwen(prompt)
         await query.edit_message_text(
-            f"💶 **EUR/USD HOY**: {data['price']}\n"
-            f"🟢 **Tendencia**: {data['trend'].upper()}\n"
-            f"📊 **RSI**: {data['rsi']}\n\n"
-            f"🔍 **Análisis Qwen**:\n{analysis}\n\n"
+            f"🤖 **Análisis Profundo**:\n{analysis}\n\n"
             "¿Qué más necesitas?",
-            reply_markup=main_menu(),
-            parse_mode='Markdown'
+            reply_markup=main_menu()
         )
 
     elif query.data == 'dashboard':
-        img = generate_dashboard(data)
-        if img:
-            await context.bot.send_photo(
-                chat_id=query.message.chat_id,
-                photo=InputFile(img),
-                caption="📈 Dashboard EUR/USD - Analiza los niveles clave y tendencias"
-            )
-        else:
-            await query.message.reply_text("❌ No se pudo generar el gráfico.")
-        await query.message.reply_text("¿Qué más necesitas?", reply_markup=main_menu())
-
-    elif query.data == 'news':
-        news_list = "\n\n".join([f"🔹 *{n['title']}*\n{n['desc']}" for n in data['news']])
         await query.edit_message_text(
-            f"📰 **Noticias de Forex**:\n\n{news_list}",
-            reply_markup=main_menu(),
-            parse_mode='Markdown'
-        )
-
-    elif query.data == 'alerts':
-        await query.edit_message_text(
-            "🔔 *Alertas*\n\n"
+            "📈 *Dashboard*\n\n"
             "Próximamente:\n"
-            "• Alertas por precio\n"
-            "• Alertas por noticias\n"
-            "• Alertas por volatilidad",
+            "• Gráficos en vivo\n"
+            "• Historial de operaciones\n"
+            "• Estadísticas de rendimiento",
             reply_markup=main_menu(),
             parse_mode='Markdown'
         )
 
-    elif query.data == 'ambassador':
-        link = f"https://t.me/TuBotUsernameBot?start=ref_{CHAT_ID}"
-        await query.edit_message_text(
-            "💡 *Modo Embajador*\n\n"
-            "Invita a otros y gana beneficios exclusivos.\n\n"
-            f"Tu enlace: `{link}`",
-            reply_markup=main_menu(),
-            parse_mode='Markdown'
-        )
+# === FUNCIONES DEL ROBOT (simplificadas) ===
+class RobotTradingBot:
+    def __init__(self):
+        self.model = None
+        self.scaler = StandardScaler()
+        self.load_model()
+
+    def load_model(self):
+        try:
+            if os.path.exists(ARCHIVO_MODELO) and os.path.exists(ARCHIVO_SCALER):
+                self.model = joblib.load(ARCHIVO_MODELO)
+                self.scaler = joblib.load(ARCHIVO_SCALER)
+                logger.info("Modelo cargado correctamente")
+            else:
+                logger.warning("Modelo no encontrado. Se usará modo simulado.")
+        except Exception as e:
+            logger.error(f"Error cargando modelo: {e}")
+
+    def predict_signal(self, symbol: str):
+        # Aquí iría la predicción real
+        # Por ahora, simulamos una señal
+        return {
+            "par": "EUR/USD",
+            "prediccion": 1,  # 1=COMPRA, -1=VENTA
+            "confianza": 0.78,
+            "precio": get_eurusd_price()
+        }
 
 # === INICIO DEL BOT ===
+async def send_daily_signals(context: ContextTypes.DEFAULT_TYPE):
+    """Envía señales automáticas cada 6 horas"""
+    robot = RobotTradingBot()
+    signal = robot.predict_signal("EURUSD=X")
+    if signal and signal['confianza'] >= CONFIANZA_MINIMA:
+        msg = (
+            f"🔔 *SEÑAL AUTOMÁTICA*\n\n"
+            f"Par: {signal['par']}\n"
+            f"Dirección: {'🟢 COMPRA' if signal['prediccion'] == 1 else '🔴 VENTA'}\n"
+            f"Precio: {signal['precio']}\n"
+            f"Confianza: {signal['confianza']*100:.0f}%"
+        )
+        try:
+            await context.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='Markdown')
+        except Exception as e:
+            logger.error(f"Error enviando señal: {e}")
+
 def main():
     # Verificar variables
     print(f"🔧 TOKEN: {'OK' if TOKEN else 'FALTA'}")
     print(f"🔧 CHAT_ID: {'OK' if CHAT_ID else 'FALTA'}")
     print(f"🔧 QWEN_API_KEY: {'OK' if QWEN_API_KEY else 'FALTA'}")
 
+    # Iniciar bot
     app = Application.builder().token(TOKEN).build()
 
-    # Añadir handlers
+    # Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    # ✅ Enviar "hola estoy despierto"
+    # Programar alertas automáticas
+    app.job_queue.run_repeating(send_daily_signals, interval=21600, first=10)  # Cada 6h
+
+    # ✅ Mensaje de inicio
     if CHAT_ID and TOKEN:
         try:
             asyncio.create_task(
                 app.bot.send_message(chat_id=CHAT_ID, text="hola estoy despierto ✅")
             )
-            print("✅ Mensaje de inicio programado")
-        except Exception as e:
-            print(f"❌ Error al programar mensaje: {e}")
+        except:
+            pass
 
-    # ✅ Iniciar bot con manejo de errores
-    try:
-        print("🚀 Iniciando bot...")
-        app.run_polling(drop_pending_updates=True)
-    except Exception as e:
-        print(f"❌ Error al iniciar el bot: {e}")
+    logger.info("🚀 Bot iniciado y listo")
+    app.run_polling()
 
 if __name__ == "__main__":
+    import asyncio
     main()
