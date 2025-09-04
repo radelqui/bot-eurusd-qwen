@@ -1,4 +1,4 @@
-# bot.py - FRONTEND DE TELEGRAM PARA ROBOT TRADING ORIGINAL
+# bot.py - ROBOT TRADING CON IA Y TELEGRAM
 import os
 import asyncio
 import logging
@@ -48,17 +48,40 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "🚀 ¡Bienvenido al Robot de Trading Inteligente!\n"
-        "Usa el menú para ver señales de EUR/USD, USD/JPY, Oro y Petróleo.",
+        "Usa el menú para ver señales de EUR/USD, USD/JPY, Oro y Petróleo.\n\n"
+        "Usa /entrenar para entrenar el modelo si es necesario.",
         reply_markup=main_menu()
     )
+
+async def entrenar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Entrena el modelo IA desde Telegram"""
+    await update.message.reply_text("🛠️ Iniciando entrenamiento del modelo IA...\nEsto puede tardar 2-3 minutos.")
+
+    try:
+        robot = RobotTradingFinal()
+        if robot.entrenar_modelo():
+            await update.message.reply_text("✅ ¡Modelo entrenado y guardado con éxito!\nAhora puedes usar 'Ver Mejor Señal'.")
+        else:
+            await update.message.reply_text("❌ Error: No se pudo entrenar el modelo.\nRevisa los logs en Railway.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error crítico: {str(e)}")
+        logger.error(f"Error en /entrenar: {e}")
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     if query.data == 'signal':
-        # Inicializar el robot
         robot = RobotTradingFinal()
+        
+        # Verificar si el modelo está cargado
+        if not robot.model or not robot.scaler:
+            await query.edit_message_text(
+                "❌ Modelo no disponible. Usa /entrenar para entrenarlo.",
+                reply_markup=main_menu()
+            )
+            return
+
         mejor_senal = None
         mejor_confianza = 0
         datos_mercado = {}
@@ -89,16 +112,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     mejor_senal = senal
 
         if mejor_senal:
-            # Calcular SL/TP reales
             sl_tp = robot.calcular_sl_tp(
                 datos_mercado[mejor_senal['ticker']]['data'],
                 mejor_senal['prediccion'],
                 mejor_senal['precio_actual']
             )
             if sl_tp:
-                # Crear mensaje con SL/TP real (usa la función original)
                 mensaje = robot.crear_mensaje_alerta(mejor_senal, sl_tp, 1000)
-                # Convertir HTML a Markdown
                 mensaje_md = mensaje.replace("<b>", "*").replace("</b>", "*")
                 await query.edit_message_text(mensaje_md, reply_markup=main_menu(), parse_mode='Markdown')
             else:
@@ -132,15 +152,12 @@ def main():
     print(f"🔧 CHAT_ID: {'OK' if CHAT_ID else 'FALTA'}")
     print(f"🔧 QWEN_API_KEY: {'OK' if QWEN_API_KEY else 'FALTA'}")
 
-    # Iniciar bot
     app = Application.builder().token(TOKEN).post_init(post_init).build()
 
     # Añadir handlers
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("entrenar", entrenar))
     app.add_handler(CallbackQueryHandler(button_handler))
-
-    # Programar alertas automáticas (opcional)
-    # app.job_queue.run_repeating(send_daily_signals, interval=21600, first=10)
 
     # Iniciar polling
     logger.info("🚀 Bot de Telegram iniciado y listo")
