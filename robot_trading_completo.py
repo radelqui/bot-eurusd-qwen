@@ -18,6 +18,9 @@ from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split, cross_val_score
+from ta.momentum import RSIIndicator
+from ta.trend import MACD, EMAIndicator
+from ta.volatility import BollingerBands, AverageTrueRange
 
 # === CONFIGURACIÓN ===
 ARCHIVO_MODELO = "modelo_ia_final.pkl"
@@ -46,12 +49,13 @@ class PriceActionAnalyzer:
     def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
 
-    def detectar_patrones_velas(self, data: pd.DataFrame) -> Dict[str, bool]:
+    def detectar_patrones_velas(self,  pd.DataFrame) -> Dict[str, bool]:
         try:
             close = data['Close']
             open_ = data['Open']
             high = data['High']
             low = data['Low']
+
             body = abs(close - open_)
             lower_wick = low - open_.where(close > open_, close)
             upper_wick = high - close.where(close > open_, open_)
@@ -61,8 +65,8 @@ class PriceActionAnalyzer:
             mecha_superior_larga = upper_wick > body * 2
 
             return {
-                'martillo': (cuerpo_pequeno & mecha_inferior_larga).iloc[-1],
-                'estrella_inversion': (cuerpo_pequeno & mecha_superior_larga).iloc[-1]
+                'martillo': bool((cuerpo_pequeno & mecha_inferior_larga).iloc[-1]),
+                'estrella_inversion': bool((cuerpo_pequeno & mecha_superior_larga).iloc[-1])
             }
         except Exception as e:
             self.logger.error(f"Error detectando patrones de velas: {e}")
@@ -107,21 +111,21 @@ class QuantumGeometricAnalyzer:
             self.logger.error(f"Error calculando Kernel: {e}")
             return data['Close'].copy()
 
-    def detectar_cruce_alma_kernel(self, data: pd.DataFrame) -> Dict[str, Any]:
+    def detectar_cruce_alma_kernel(self,  pd.DataFrame) -> Dict[str, Any]:
         try:
             alma = self._calcular_alma(data['Close'])
             kernel = self._calcular_quantum_kernel(data)
             cruce = (alma > kernel) & (alma.shift(1) < kernel.shift(1))
             distancia = (alma - kernel).iloc[-1]
             return {
-                'cruce': cruce.iloc[-1],
-                'distancia': distancia
+                'cruce': bool(cruce.iloc[-1]),
+                'distancia': float(distancia)
             }
         except Exception as e:
             self.logger.error(f"Error detectando cruce ALMA/Kernel: {e}")
-            return {'cruce': False, 'distancia': 0}
+            return {'cruce': False, 'distancia': 0.0}
 
-    def detectar_bloques_geometricos(self, data: pd.DataFrame) -> Dict[str, bool]:
+    def detectar_bloques_geometricos(self,  pd.DataFrame) -> Dict[str, bool]:
         try:
             close = data['Close']
             open_ = data['Open']
@@ -136,9 +140,9 @@ class QuantumGeometricAnalyzer:
             mecha_superior_larga = upper_wick > body * 2
 
             return {
-                'consolidacion': (cuerpo_pequeno & ~mecha_inferior_larga & ~mecha_superior_larga).iloc[-1],
-                'momentum': (~cuerpo_pequeno & (mecha_inferior_larga | mecha_superior_larga)).iloc[-1],
-                'rango_relativo': ((high - low) / body).iloc[-1] if body.iloc[-1] > 0 else np.inf
+                'consolidacion': bool((cuerpo_pequeno & ~mecha_inferior_larga & ~mecha_superior_larga).iloc[-1]),
+                'momentum': bool((~cuerpo_pequeno & (mecha_inferior_larga | mecha_superior_larga)).iloc[-1]),
+                'rango_relativo': float((high - low).iloc[-1] / body.iloc[-1]) if body.iloc[-1] > 0 else 1.0
             }
         except Exception as e:
             self.logger.error(f"Error detectando bloques geométricos: {e}")
@@ -163,7 +167,7 @@ class DataProvider:
             return self.cache[cache_key]['data']
 
         try:
-            data = yf.download(symbol, start=start_date, end=end_date, interval=interval)
+            data = yf.download(symbol, start=start_date, end=end_date, interval=interval, auto_adjust=True)
             if data.empty:
                 return None
 
@@ -180,7 +184,7 @@ class DataProvider:
 
     def get_latest_data(self, symbol: str, interval: str, lookback: int) -> Optional[pd.DataFrame]:
         try:
-            data = yf.download(symbol, period="60d", interval=interval)
+            data = yf.download(symbol, period="60d", interval=interval, auto_adjust=True)
             return data.tail(lookback) if len(data) >= lookback else data
         except Exception as e:
             logger.error(f"Error obteniendo datos de {symbol}: {e}")
@@ -259,8 +263,18 @@ class RobotTradingFinal:
                 logger.error("Datos insuficientes para entrenar")
                 return False
 
+            # Asegurar que no haya valores NaN o infinitos
             X = df.drop(['resultado', 'par', 'cambio_real', 'umbral_usado'], axis=1, errors='ignore')
             y = df['resultado']
+
+            # Eliminar filas con NaN o inf
+            valid_rows = X.apply(lambda row: not row.isna().any() and not np.isinf(row).any(), axis=1)
+            X = X[valid_rows]
+            y = y[valid_rows.index[valid_rows]]
+
+            if len(X) == 0:
+                logger.error("No hay muestras válidas después de limpieza")
+                return False
 
             X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
             self.scaler.fit(X_train)
@@ -301,7 +315,7 @@ class RobotTradingFinal:
             logger.error(f"Error entrenando modelo: {e}")
             return False
 
-    def predecir_senal(self, data: pd.DataFrame, info: Dict):
+    def predecir_senal(self,  pd.DataFrame, info: Dict):
         try:
             if self.model is None or self.scaler is None:
                 logger.error("Modelo no cargado.")
@@ -341,7 +355,7 @@ class RobotTradingFinal:
             logger.error(f"Error prediciendo señal: {e}")
             return None, str(e)
 
-    def asegurar_formato_datos(self, data: pd.DataFrame) -> Optional[pd.DataFrame]:
+    def asegurar_formato_datos(self,  pd.DataFrame) -> Optional[pd.DataFrame]:
         try:
             if data is None or data.empty:
                 return None
@@ -354,7 +368,7 @@ class RobotTradingFinal:
             logger.error(f"Error asegurando formato de datos: {e}")
             return None
 
-    def extraer_features(self, data: pd.DataFrame, ticker: str) -> Dict[str, float]:
+    def extraer_features(self,  pd.DataFrame, ticker: str) -> Dict[str, float]:
         try:
             close = data['Close']
             high = data['High']
@@ -363,8 +377,8 @@ class RobotTradingFinal:
             precio_actual = close.iloc[-1]
 
             # Indicadores técnicos
-            ema_20 = close.ewm(span=20).mean()
-            ema_50 = close.ewm(span=50).mean()
+            ema_20 = EMAIndicator(close, window=20).ema_indicator()
+            ema_50 = EMAIndicator(close, window=50).ema_indicator()
             rsi = RSIIndicator(close).rsi().iloc[-1]
             macd = MACD(close).macd().iloc[-1]
             macd_signal = MACD(close).macd_signal().iloc[-1]
@@ -489,11 +503,24 @@ class RobotTradingFinal:
             return muestras
 
         close = data_formateada['Close']
-        for i in range(60, len(data_formateada)):
+        high = data_formateada['High']
+        low = data_formateada['Low']
+        volume = data_formateada['Volume']
+
+        for i in range(60, len(data_formateada) - 10):
             try:
                 precio_actual = close.iloc[i]
-                umbral_dinamico = precio_actual * 0.001
-                cambio_porcentual = (close.iloc[i + 10] - precio_actual) / precio_actual if i + 10 < len(close) else 0
+                if pd.isna(precio_actual) or precio_actual <= 0:
+                    continue
+
+                # Calcular ATR para umbral dinámico
+                atr = AverageTrueRange(high[:i+1], low[:i+1], close[:i+1]).average_true_range().iloc[-1]
+                if pd.isna(atr) or atr <= 0:
+                    continue
+
+                umbral_dinamico = atr * 0.5  # 0.5 ATR como umbral
+                precio_futuro = close.iloc[i + 10]
+                cambio_porcentual = (precio_futuro - precio_actual) / precio_actual
 
                 if cambio_porcentual > umbral_dinamico:
                     resultado = 1
@@ -506,7 +533,18 @@ class RobotTradingFinal:
                 features['resultado'] = resultado
                 features['par'] = ticker
                 features['cambio_real'] = cambio_porcentual
-                muestras.append(features)
+                features['umbral_usado'] = umbral_dinamico
+
+                # Validar que todas las features sean números válidos
+                is_valid = True
+                for k, v in features.items():
+                    if isinstance(v, (int, float)):
+                        if pd.isna(v) or np.isinf(v) or abs(v) > 10000:
+                            is_valid = False
+                            break
+
+                if is_valid:
+                    muestras.append(features)
             except Exception as e:
                 logger.error(f"Error procesando muestra: {e}")
                 continue
