@@ -49,7 +49,7 @@ class PriceActionAnalyzer:
     def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
 
-    def detectar_patrones_velas(self,  pd.DataFrame) -> Dict[str, bool]:
+    def detectar_patrones_velas(self, data: pd.DataFrame) -> Dict[str, bool]:
         try:
             close = data['Close']
             open_ = data['Open']
@@ -71,7 +71,7 @@ class PriceActionAnalyzer:
             self.logger.error(f"Error detectando patrones de velas: {e}")
             return {'martillo': False, 'estrella_inversion': False}
 
-    def detectar_tendencia(self,  pd.DataFrame) -> str:
+    def detectar_tendencia(self, data: pd.DataFrame) -> str:
         try:
             ema_20 = data['Close'].ewm(span=20).mean()
             ema_50 = data['Close'].ewm(span=50).mean()
@@ -102,7 +102,7 @@ class QuantumGeometricAnalyzer:
             self.logger.error(f"Error calculando ALMA: {e}")
             return prices.copy()
 
-    def _calcular_quantum_kernel(self,  pd.DataFrame) -> pd.Series:
+    def _calcular_quantum_kernel(self, data: pd.DataFrame) -> pd.Series:
         try:
             kernel = data['Close'].rolling(7).mean() + data['Close'].pct_change().rolling(14).std() * 100
             return kernel
@@ -110,7 +110,7 @@ class QuantumGeometricAnalyzer:
             self.logger.error(f"Error calculando Kernel: {e}")
             return data['Close'].copy()
 
-    def detectar_cruce_alma_kernel(self,  pd.DataFrame) -> Dict[str, Any]:
+    def detectar_cruce_alma_kernel(self, data: pd.DataFrame) -> Dict[str, Any]:
         try:
             alma = self._calcular_alma(data['Close'])
             kernel = self._calcular_quantum_kernel(data)
@@ -124,7 +124,7 @@ class QuantumGeometricAnalyzer:
             self.logger.error(f"Error detectando cruce ALMA/Kernel: {e}")
             return {'cruce': False, 'distancia': 0.0}
 
-    def detectar_bloques_geometricos(self,  pd.DataFrame) -> Dict[str, bool]:
+    def detectar_bloques_geometricos(self, data: pd.DataFrame) -> Dict[str, bool]:
         try:
             close = data['Close']
             open_ = data['Open']
@@ -310,7 +310,7 @@ class RobotTradingFinal:
             logger.error(f"Error entrenando modelo: {e}")
             return False
 
-    def predecir_senal(self,  pd.DataFrame, info: Dict):
+    def predecir_senal(self, data: pd.DataFrame, info: Dict):
         try:
             if self.model is None or self.scaler is None:
                 logger.error("Modelo no cargado.")
@@ -350,7 +350,7 @@ class RobotTradingFinal:
             logger.error(f"Error prediciendo señal: {e}")
             return None, str(e)
 
-    def asegurar_formato_datos(self,  pd.DataFrame) -> Optional[pd.DataFrame]:
+    def asegurar_formato_datos(self, data: pd.DataFrame) -> Optional[pd.DataFrame]:
         try:
             if data is None or data.empty:
                 return None
@@ -411,7 +411,7 @@ class RobotTradingFinal:
             logger.error(f"Error extrayendo features: {e}")
             return {}
 
-    def calcular_sl_tp(self,  pd.DataFrame, prediccion: int, precio_entrada: float):
+    def calcular_sl_tp(self, data: pd.DataFrame, prediccion: int, precio_entrada: float):
         try:
             data_formateada = self.asegurar_formato_datos(data)
             if data_formateada is None:
@@ -494,7 +494,7 @@ class RobotTradingFinal:
         logger.info(f"Total de muestras recolectadas: {len(todos_los_datos)}")
         return todos_los_datos
 
-    def procesar_datos_par(self,  pd.DataFrame, ticker: str, sr_niveles: Dict) -> List[Dict]:
+    def procesar_datos_par(self, data: pd.DataFrame, ticker: str, sr_niveles: Dict) -> List[Dict]:
         muestras = []
         data_formateada = self.asegurar_formato_datos(data)
         if data_formateada is None or len(data_formateada) < 60:
