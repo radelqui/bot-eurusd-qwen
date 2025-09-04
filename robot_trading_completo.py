@@ -1,4 +1,4 @@
-# robot_trading_completo.py
+# robot_trading_completo.py - VERSIÓN CORREGIDA
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -49,7 +49,7 @@ class PriceActionAnalyzer:
     def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
 
-    def detectar_patrones_velas(self,  pd.DataFrame) -> Dict[str, bool]:
+    def detectar_patrones_velas(self, data: pd.DataFrame) -> Dict[str, bool]:
         try:
             close = data['Close']
             open_ = data['Open']
@@ -111,7 +111,7 @@ class QuantumGeometricAnalyzer:
             self.logger.error(f"Error calculando Kernel: {e}")
             return data['Close'].copy()
 
-    def detectar_cruce_alma_kernel(self,  pd.DataFrame) -> Dict[str, Any]:
+    def detectar_cruce_alma_kernel(self, data: pd.DataFrame) -> Dict[str, Any]:
         try:
             alma = self._calcular_alma(data['Close'])
             kernel = self._calcular_quantum_kernel(data)
@@ -125,7 +125,7 @@ class QuantumGeometricAnalyzer:
             self.logger.error(f"Error detectando cruce ALMA/Kernel: {e}")
             return {'cruce': False, 'distancia': 0.0}
 
-    def detectar_bloques_geometricos(self,  pd.DataFrame) -> Dict[str, bool]:
+    def detectar_bloques_geometricos(self, data: pd.DataFrame) -> Dict[str, bool]:
         try:
             close = data['Close']
             open_ = data['Open']
@@ -315,7 +315,7 @@ class RobotTradingFinal:
             logger.error(f"Error entrenando modelo: {e}")
             return False
 
-    def predecir_senal(self,  pd.DataFrame, info: Dict):
+    def predecir_senal(self, data: pd.DataFrame, info: Dict):
         try:
             if self.model is None or self.scaler is None:
                 logger.error("Modelo no cargado.")
@@ -355,7 +355,7 @@ class RobotTradingFinal:
             logger.error(f"Error prediciendo señal: {e}")
             return None, str(e)
 
-    def asegurar_formato_datos(self,  pd.DataFrame) -> Optional[pd.DataFrame]:
+    def asegurar_formato_datos(self, data: pd.DataFrame) -> Optional[pd.DataFrame]:
         try:
             if data is None or data.empty:
                 return None
@@ -368,7 +368,7 @@ class RobotTradingFinal:
             logger.error(f"Error asegurando formato de datos: {e}")
             return None
 
-    def extraer_features(self,  pd.DataFrame, ticker: str) -> Dict[str, float]:
+    def extraer_features(self, data: pd.DataFrame, ticker: str) -> Dict[str, float]:
         try:
             close = data['Close']
             high = data['High']
@@ -496,7 +496,7 @@ class RobotTradingFinal:
         logger.info(f"Total de muestras recolectadas: {len(todos_los_datos)}")
         return todos_los_datos
 
-    def procesar_datos_par(self, data, ticker, sr_niveles):
+    def procesar_datos_par(self, data: pd.DataFrame, ticker: str, sr_niveles: Dict):
         muestras = []
         data_formateada = self.asegurar_formato_datos(data)
         if data_formateada is None:
@@ -550,7 +550,7 @@ class RobotTradingFinal:
                 continue
         return muestras
 
-    def calcular_sr_multitimeframe(self, ticker):
+    def calcular_sr_multitimeframe(self, ticker: str):
         niveles = {}
         timeframes = {"1d": "1mo", "4h": "10d", "1h": "5d"}
         for tf, periodo in timeframes.items():
