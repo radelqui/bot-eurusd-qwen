@@ -8,3 +8,4 @@ python-telegram-bot[asyncio,job-queue]
 python-dotenv
 joblib
 plotly
+matplotlib 
