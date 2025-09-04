@@ -4,6 +4,7 @@ numpy
 requests
 scikit-learn
 ta
-python-telegram-bot[asyncio]
+python-telegram-bot[asyncio,job-queue]
 python-dotenv
 joblib
+plotly
